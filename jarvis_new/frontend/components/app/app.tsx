@@ -41,7 +41,6 @@ export function App({ appConfig }: AppProps) {
       publishDefaults: {
         red: true,
         dtx: true,
-        audioBitrate: 32000,
       },
       audioCaptureDefaults: {
         autoGainControl: true,
