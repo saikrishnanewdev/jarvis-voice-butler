@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  agent-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jarvis-agent-backend
+    restart: always
+    environment:
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - HEADLESS=true
+    env_file:
+      - .env.local
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: jarvis-frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - NEXT_PUBLIC_AGENT_NAME=my-agent
+    env_file:
+      - ./frontend/.env.local

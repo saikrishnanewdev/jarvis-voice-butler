@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { TokenSource } from 'livekit-client';
+import { Room, TokenSource } from 'livekit-client';
 import { useSession } from '@livekit/components-react';
 import { WarningIcon } from '@phosphor-icons/react/dist/ssr';
 import type { AppConfig } from '@/app-config';
@@ -11,6 +11,7 @@ import { JarvisBackground } from '@/components/app/jarvis-background';
 import { ViewController } from '@/components/app/view-controller';
 import { Toaster } from '@/components/ui/sonner';
 import { useAgentErrors } from '@/hooks/useAgentErrors';
+import { useDataChannelCommands } from '@/hooks/useDataChannelCommands';
 import { useDebugMode } from '@/hooks/useDebug';
 import { getSandboxTokenSource } from '@/lib/utils';
 
@@ -19,6 +20,7 @@ const IN_DEVELOPMENT = process.env.NODE_ENV !== 'production';
 function AppSetup() {
   useDebugMode({ enabled: IN_DEVELOPMENT });
   useAgentErrors();
+  useDataChannelCommands();
 
   return null;
 }
@@ -34,10 +36,29 @@ export function App({ appConfig }: AppProps) {
       : TokenSource.endpoint('/api/token');
   }, [appConfig]);
 
-  const session = useSession(
-    tokenSource,
-    appConfig.agentName ? { agentName: appConfig.agentName } : undefined
-  );
+  const room = useMemo(() => {
+    return new Room({
+      publishDefaults: {
+        red: true,
+        dtx: true,
+        audioBitrate: 32000,
+      },
+      audioCaptureDefaults: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    });
+  }, []);
+
+  const sessionOptions = useMemo(() => {
+    return {
+      room,
+      ...(appConfig.agentName ? { agentName: appConfig.agentName } : {}),
+    };
+  }, [room, appConfig.agentName]);
+
+  const session = useSession(tokenSource, sessionOptions);
 
   return (
     <AgentSessionProvider session={session}>

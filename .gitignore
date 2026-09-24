@@ -33,3 +33,8 @@ build/
 
 # Logs
 *.log
+
+# Browser data & scratch
+.browser_data/
+scratch/
+scratch_*/

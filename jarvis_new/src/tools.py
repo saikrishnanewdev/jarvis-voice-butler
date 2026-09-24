@@ -1,4 +1,9 @@
-from urllib.parse import urlencode
+import asyncio
+import json
+import logging
+import os
+import sys
+from urllib.parse import quote, urlencode
 
 from livekit.agents import RunContext, function_tool
 from livekit.agents.llm import ToolError
@@ -13,6 +18,30 @@ def duckduckgo_search_url(query: str) -> str:
     return f"https://duckduckgo.com/?{urlencode({'q': query})}"
 
 
+async def _dispatch_open_url(context: RunContext, url: str) -> None:
+    # LiveKit DataChannel message to Frontend client
+    try:
+        room = None
+        for attr in ("room", "session"):
+            val = getattr(context, attr, None)
+            if val and hasattr(val, "local_participant"):
+                room = val
+                break
+            elif val and hasattr(val, "room") and val.room:
+                room = val.room
+                break
+            elif val and hasattr(val, "_room") and val._room:
+                room = val._room
+                break
+
+        if room and hasattr(room, "local_participant") and room.local_participant:
+            payload = json.dumps({"type": "open_url", "url": url}).encode("utf-8")
+            await room.local_participant.publish_data(payload)
+            logging.info(f"[DataChannel] Dispatched open_url packet for: {url}")
+    except Exception as e:
+        logging.warning(f"[DataChannel] Failed to publish open_url packet: {e}")
+
+
 class BrowserTools:
     def __init__(self, browser: BrowserManager) -> None:
         self.browser = browser
@@ -23,6 +52,7 @@ class BrowserTools:
         return [
             self.open_url,
             self.search_the_web,
+            self.send_whatsapp_message,
             self.read_page,
             self.inspect_page,
             self.go_back,
@@ -51,8 +81,105 @@ class BrowserTools:
             query: A concise DuckDuckGo search query containing all relevant context.
         """
         try:
-            return await self.browser.open_url(duckduckgo_search_url(query))
+            target_url = duckduckgo_search_url(query)
+            await _dispatch_open_url(context, target_url)
+            asyncio.create_task(self.browser.open_url(target_url))
+            return {
+                "status": "opened",
+                "url": target_url,
+                "info": f"Opened search results for {query!r} in browser.",
+            }
         except (BrowserError, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @function_tool()
+    async def send_whatsapp_message(
+        self,
+        context: RunContext,
+        phone_number: str,
+        message: str,
+    ) -> dict[str, str]:
+        """Send or prepare a WhatsApp message to a phone number.
+
+        Use this when the user asks to send a WhatsApp message or chat on WhatsApp.
+
+        Args:
+            phone_number: Phone number with country code (e.g. '9876543210' or '+919876543210').
+            message: The text message to send.
+        """
+        cleaned_num = "".join(c for c in phone_number if c.isdigit())
+        if len(cleaned_num) == 10:
+            cleaned_num = f"91{cleaned_num}"
+
+        encoded_msg = quote(message)
+
+        # 1. Try launching native Windows WhatsApp Desktop App directly
+        if sys.platform == "win32":
+            try:
+                whatsapp_url = f"whatsapp://send?phone={cleaned_num}&text={encoded_msg}"
+                os.system(f'start "" "{whatsapp_url}"')
+                await asyncio.sleep(2)
+
+                # Send keystroke Enter to send message automatically in WhatsApp desktop app
+                try:
+                    import ctypes
+
+                    user32 = ctypes.WinDLL("user32", use_last_error=True)
+                    user32.keybd_event(0x0D, 0, 0, 0)
+                    user32.keybd_event(0x0D, 0, 2, 0)
+                except Exception:
+                    pass
+
+                return {
+                    "status": "opened_native_app",
+                    "info": f"Opened native Windows WhatsApp App for +{cleaned_num} with message ready.",
+                }
+            except Exception:
+                pass
+
+        # 2. Fallback to WhatsApp Web
+        wa_url = f"https://web.whatsapp.com/send?phone={cleaned_num}&text={encoded_msg}"
+        await _dispatch_open_url(context, wa_url)
+        try:
+            page = await self.browser._get_page()
+            await page.goto(wa_url, wait_until="domcontentloaded")
+            await asyncio.sleep(4)
+
+            qr_code = page.locator("canvas[aria-label*='Scan'], div[data-ref]")
+            if await qr_code.count() > 0 and await qr_code.first.is_visible():
+                return {
+                    "status": "qr_required",
+                    "info": "WhatsApp Web opened on your laptop screen, but requires QR code login. Please scan the QR code on your laptop screen with your phone camera once to link WhatsApp!",
+                }
+
+            send_button = page.locator(
+                "button[aria-label='Send'], span[data-icon='send']"
+            ).first
+            if await send_button.is_visible():
+                await send_button.click()
+                await asyncio.sleep(2)
+                return {
+                    "status": "sent",
+                    "info": f"Successfully clicked Send! WhatsApp message sent to +{cleaned_num}.",
+                }
+
+            chat_input = page.locator(
+                "footer div[contenteditable='true'], div[contenteditable='true']"
+            ).last
+            if await chat_input.is_visible():
+                await chat_input.focus()
+                await page.keyboard.press("Enter")
+                await asyncio.sleep(2)
+                return {
+                    "status": "sent",
+                    "info": f"Pressed Enter! WhatsApp message sent to +{cleaned_num}.",
+                }
+
+            return {
+                "status": "opened",
+                "info": f"Opened WhatsApp Web for +{cleaned_num} with message ready.",
+            }
+        except BrowserError as exc:
             raise ToolError(str(exc)) from exc
 
     @function_tool()
@@ -66,8 +193,17 @@ class BrowserTools:
             url: A complete http or https URL to open.
         """
         try:
-            return await self.browser.open_url(url)
-        except BrowserError as exc:
+            full_url = (
+                url if url.startswith(("http://", "https://")) else f"https://{url}"
+            )
+            await _dispatch_open_url(context, full_url)
+            asyncio.create_task(self.browser.open_url(full_url))
+            return {
+                "status": "opened",
+                "url": full_url,
+                "info": f"Opened {full_url} directly on user's screen.",
+            }
+        except Exception as exc:
             raise ToolError(str(exc)) from exc
 
     @function_tool()

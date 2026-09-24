@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 import asyncio
 import contextlib
+import os
 import re
 import sys
 import time
@@ -9,6 +8,7 @@ import uuid
 from typing import Literal
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
 from playwright.async_api import (
     Locator,
     Page,
@@ -17,6 +17,8 @@ from playwright.async_api import (
 from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
+
+load_dotenv(".env.local")
 
 
 class BrowserError(Exception):
@@ -118,32 +120,72 @@ def _focus_window_with_title(title: str, *, timeout_seconds: float = 2.0) -> boo
             user32.AttachThreadInput(current_thread, foreground_thread, False)
 
 
-async def _bring_page_window_to_front(page: Page) -> None:
-    marker = f"Jarvis Browser {uuid.uuid4().hex}"
-    original_title = ""
-    title_changed = False
+def _focus_playwright_chrome_window() -> bool:
+    if sys.platform != "win32":
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def enum_proc(hwnd, lparam):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value
+                # Focus Chrome / Chromium / YouTube / DuckDuckGo windows excluding localhost dev frontend
+                if (
+                    any(
+                        k in title
+                        for k in (
+                            "Chrome",
+                            "Chromium",
+                            "YouTube",
+                            "Google",
+                            "DuckDuckGo",
+                            "WhatsApp",
+                        )
+                    )
+                    and "localhost:3000" not in title
+                ):
+                    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                    user32.SetForegroundWindow(hwnd)
+        return True
+
     try:
-        original_title = await page.title()
-        await page.evaluate("title => { document.title = title; }", marker)
-        title_changed = True
-        await page.bring_to_front()
-        await asyncio.to_thread(_focus_window_with_title, marker)
+        user32.EnumWindows(enum_proc, 0)
+        return True
     except Exception:
-        # Foreground activation is best-effort and must not prevent browser use.
+        return False
+
+
+async def _bring_page_window_to_front(page: Page) -> None:
+    try:
+        await page.bring_to_front()
+        unique_title = f"Jarvis Browser {uuid.uuid4().hex[:8]}"
+        original_title = await page.title()
+        await page.evaluate("title => { document.title = title; }", unique_title)
+        await asyncio.to_thread(_focus_window_with_title, unique_title)
+        if original_title:
+            await page.evaluate("title => { document.title = title; }", original_title)
+        await asyncio.to_thread(_focus_playwright_chrome_window)
+    except Exception:
         return
-    finally:
-        if title_changed:
-            with contextlib.suppress(Exception):
-                await page.evaluate(
-                    "title => { document.title = title; }",
-                    original_title,
-                )
 
 
 class BrowserManager:
-    """Own one isolated, visible browser for a LiveKit room."""
+    """Own one isolated, visible or headless browser for a LiveKit room."""
 
-    def __init__(self, *, headless: bool = False, timeout_ms: int = 15_000) -> None:
+    def __init__(
+        self, *, headless: bool | None = None, timeout_ms: int = 15_000
+    ) -> None:
+        if headless is None:
+            env_headless = os.getenv("HEADLESS", "false").lower()
+            headless = env_headless not in ("false", "0", "no")
         self._headless = headless
         self._timeout_ms = timeout_ms
         self._playwright = None
@@ -156,12 +198,41 @@ class BrowserManager:
         if self._page is not None:
             return
 
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=self._headless,
+        user_data_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", ".browser_data")
         )
-        self._context = await self._browser.new_context()
-        self._page = await self._context.new_page()
+        os.makedirs(user_data_dir, exist_ok=True)
+
+        self._playwright = await async_playwright().start()
+
+        # Remove stale lock files if present
+        for lock_file in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            lock_path = os.path.join(user_data_dir, lock_file)
+            if os.path.exists(lock_path):
+                with contextlib.suppress(Exception):
+                    os.remove(lock_path)
+
+        try:
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                channel="chrome",
+                headless=self._headless,
+                args=["--start-maximized"],
+                no_viewport=True,
+            )
+        except Exception:
+            self._browser = await self._playwright.chromium.launch(
+                channel="chrome",
+                headless=self._headless,
+                args=["--start-maximized"],
+            )
+            self._context = await self._browser.new_context(no_viewport=True)
+
+        self._page = (
+            self._context.pages[0]
+            if self._context.pages
+            else await self._context.new_page()
+        )
         self._page.set_default_timeout(self._timeout_ms)
         if not self._headless:
             await _bring_page_window_to_front(self._page)
@@ -170,8 +241,6 @@ class BrowserManager:
         async with self._lock:
             if self._context is not None:
                 await self._context.close()
-            if self._browser is not None:
-                await self._browser.close()
             if self._playwright is not None:
                 await self._playwright.stop()
 
@@ -181,12 +250,14 @@ class BrowserManager:
             self._playwright = None
 
     async def open_url(self, url: str) -> dict[str, str]:
-        self._validate_url(url)
+        valid_url = self._validate_url(url)
         page = await self._get_page()
 
         async with self._lock:
             try:
-                await page.goto(url, wait_until="domcontentloaded")
+                if not self._headless:
+                    await _bring_page_window_to_front(page)
+                await page.goto(valid_url, wait_until="domcontentloaded")
                 return await self._page_summary(page)
             except PlaywrightTimeoutError as exc:
                 raise BrowserError("The page took too long to load.") from exc
@@ -297,13 +368,17 @@ class BrowserManager:
 
             return await self._page_summary(page)
 
-    async def type_text(self, target: str, text: str) -> dict[str, str]:
+    async def type_text(self, target: str, text: str, *, press_enter: bool = True) -> dict[str, str]:
         page = await self._get_page()
 
         async with self._lock:
             locator = await self._resolve_textbox(page, target)
             try:
                 await locator.fill(text)
+                if press_enter:
+                    await page.keyboard.press("Enter")
+                    with contextlib.suppress(PlaywrightTimeoutError):
+                        await page.wait_for_load_state("domcontentloaded", timeout=5_000)
             except Exception as exc:
                 raise BrowserError(f"I could not type into {target!r}: {exc}") from exc
 
@@ -346,12 +421,16 @@ class BrowserManager:
         return self._page
 
     @staticmethod
-    def _validate_url(url: str) -> None:
-        parsed = urlparse(url.strip())
+    def _validate_url(url: str) -> str:
+        clean_url = url.strip()
+        if not clean_url.startswith(("http://", "https://")):
+            raise BrowserError("Only valid HTTP or HTTPS URLs can be opened.")
+        parsed = urlparse(clean_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise BrowserError("Only complete http or https URLs can be opened.")
+            raise BrowserError("Only valid HTTP or HTTPS URLs can be opened.")
         if parsed.username or parsed.password:
             raise BrowserError("URLs containing embedded credentials are not allowed.")
+        return clean_url
 
     @staticmethod
     async def _page_summary(page: Page) -> dict[str, str]:

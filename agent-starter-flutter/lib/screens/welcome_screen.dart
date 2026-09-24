@@ -4,6 +4,7 @@ import 'package:livekit_client/livekit_client.dart' as sdk;
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart' show launchUrl;
 import '../controllers/app_ctrl.dart' as ctrl;
+import '../support/incall_helper.dart';
 import '../widgets/agent_status_indicator.dart';
 import '../widgets/button.dart' as buttons;
 
@@ -51,16 +52,25 @@ class WelcomeScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-                // Agent status indicator
                 const AgentStatusIndicator(),
                 Consumer2<ctrl.AppCtrl, sdk.Session>(
                   builder: (ctx, appCtrl, session, child) {
                     final isProgressing =
                         appCtrl.isSessionStarting || session.connectionState != sdk.ConnectionState.disconnected;
-                    return buttons.Button(
-                      text: isProgressing ? 'Connecting' : 'Start call',
-                      isProgressing: isProgressing,
-                      onPressed: () => appCtrl.connect(),
+                    return Column(
+                      spacing: 12,
+                      children: [
+                        buttons.Button(
+                          text: isProgressing ? 'Connecting' : 'Start call',
+                          isProgressing: isProgressing,
+                          onPressed: () => appCtrl.connect(),
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.phone_in_talk, size: 18),
+                          label: const Text('Set as Default Phone App (SIM Calls)'),
+                          onPressed: () => InCallHelper.requestDefaultDialer(),
+                        ),
+                      ],
                     );
                   },
                 ),
