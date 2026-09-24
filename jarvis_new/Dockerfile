@@ -32,8 +32,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy dependency lock files
+# Copy dependency lock files and source package
 COPY pyproject.toml uv.lock ./
+COPY src/ ./src/
 
 # Install Python packages and Playwright Chromium
 RUN uv sync
