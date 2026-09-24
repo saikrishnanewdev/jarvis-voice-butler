@@ -30,4 +30,4 @@ services:
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - NEXT_PUBLIC_AGENT_NAME=my-agent
     env_file:
-      - ./frontend/.env.local
+      - .env.local
