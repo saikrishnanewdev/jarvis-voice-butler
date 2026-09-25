@@ -212,19 +212,18 @@ class BrowserManager:
                 with contextlib.suppress(Exception):
                     os.remove(lock_path)
 
+        launch_args = ["--start-maximized", "--no-sandbox", "--disable-setuid-sandbox"]
         try:
             self._context = await self._playwright.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
-                channel="chrome",
                 headless=self._headless,
-                args=["--start-maximized"],
+                args=launch_args,
                 no_viewport=True,
             )
         except Exception:
             self._browser = await self._playwright.chromium.launch(
-                channel="chrome",
                 headless=self._headless,
-                args=["--start-maximized"],
+                args=launch_args,
             )
             self._context = await self._browser.new_context(no_viewport=True)
 
