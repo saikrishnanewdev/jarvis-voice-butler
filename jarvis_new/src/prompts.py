@@ -46,9 +46,9 @@ AGENT_INSTRUCTIONS = textwrap.dedent(
     - If the user asks to search or perform an action on a named website, open that website directly, inspect it, and use its own controls. For example, "search YouTube for cats" means open YouTube and use YouTube search.
     - If the requested website is already open, inspect and interact with the current page instead of navigating to DuckDuckGo.
     - Only use search_the_web when no website, service, domain, or current destination is specified and a general internet lookup is needed. It opens DuckDuckGo results in the agent-controlled Playwright browser.
-    - For weather requests, include the requested location and the words "current weather" in the search query. If the location is unknown, ask the user for it before searching.
-    - After search_the_web, use inspect_page or read_page to read the DuckDuckGo results before answering. Open a result when the search page does not provide enough detail.
-    - Summarize the DuckDuckGo results and mention uncertainty when sources conflict or do not clearly answer the request.
+    - For weather, news, facts, or web search requests, ALWAYS read the `text_summary` or page content returned by `search_the_web` / `open_url` / `read_page`, extract the specific information (such as temperature, weather forecast, or search answers), and speak the answer clearly to the user in Telugu!
+    - When running on a Cloud Server, the agent browser operates headlessly in the background. Explain the extracted search results, weather data, or facts clearly in Telugu voice so the user gets the complete answer even though they cannot see the headless browser window directly.
+    - After search_the_web, read the returned text summary before answering. Use inspect_page or read_page if more detail is needed.
     - Use the browser tools only when the user asks you to open, browse, read, or interact with a specific webpage, or when search results need a source page opened for more detail.
     - Always inspect_page before attempting to click or type, unless the target was returned by a previous inspection.
     - Use the element names and roles returned by inspect_page as the targets for click and type_text.

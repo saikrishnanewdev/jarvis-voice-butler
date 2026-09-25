@@ -69,7 +69,7 @@ class BrowserTools:
         self,
         context: RunContext,
         query: str,
-    ) -> dict[str, str]:
+    ) -> dict[str, str | bool]:
         """Open fallback DuckDuckGo results in the agent-controlled browser.
 
         Use this only when the user needs a general internet search and did not name a
@@ -83,11 +83,14 @@ class BrowserTools:
         try:
             target_url = duckduckgo_search_url(query)
             await _dispatch_open_url(context, target_url)
-            asyncio.create_task(self.browser.open_url(target_url))
+            await self.browser.open_url(target_url)
+            page_info = await self.browser.read_page(max_chars=4000)
             return {
                 "status": "opened",
                 "url": target_url,
-                "info": f"Opened search results for {query!r} in browser.",
+                "title": str(page_info.get("title", "")),
+                "text_summary": str(page_info.get("text", ""))[:3000],
+                "info": f"Opened search results for {query!r} in browser. Page text content is in text_summary.",
             }
         except (BrowserError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
@@ -197,11 +200,14 @@ class BrowserTools:
                 url if url.startswith(("http://", "https://")) else f"https://{url}"
             )
             await _dispatch_open_url(context, full_url)
-            asyncio.create_task(self.browser.open_url(full_url))
+            await self.browser.open_url(full_url)
+            page_info = await self.browser.read_page(max_chars=4000)
             return {
                 "status": "opened",
                 "url": full_url,
-                "info": f"Opened {full_url} directly on user's screen.",
+                "title": str(page_info.get("title", "")),
+                "text_summary": str(page_info.get("text", ""))[:3000],
+                "info": f"Opened {full_url} directly. Page text content is provided in text_summary.",
             }
         except Exception as exc:
             raise ToolError(str(exc)) from exc
