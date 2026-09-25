@@ -62,6 +62,7 @@ class BrowserTools:
             self.type_text,
             self.scroll,
             self.press_key,
+            self.close_browser,
         ]
 
     @function_tool()
@@ -319,6 +320,18 @@ class BrowserTools:
         try:
             return await self.browser.press_key(key)
         except BrowserError as exc:
+            raise ToolError(str(exc)) from exc
+
+    @function_tool()
+    async def close_browser(self, context: RunContext) -> dict[str, str]:
+        """Close the active agent browser session and free memory.
+
+        Use this when the user asks to close the browser or stop browsing.
+        """
+        try:
+            await self.browser.close()
+            return {"status": "closed", "info": "Browser session closed successfully."}
+        except Exception as exc:
             raise ToolError(str(exc)) from exc
 
     @staticmethod
