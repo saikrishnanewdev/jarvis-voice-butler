@@ -76,6 +76,8 @@ async def my_agent(ctx: JobContext):
         "room": ctx.room.name,
     }
 
+    await ctx.connect()
+
     # Lazy browser management (starts automatically on first browser tool call)
     browser = BrowserManager()
     ctx.add_shutdown_callback(browser.close)
